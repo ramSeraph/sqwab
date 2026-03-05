@@ -73,17 +73,17 @@ jobs:
       working-directory: ./wa-sqlite
       run: make ${{inputs.make_args}}
 
-    # Copy dist + src VFS files for GitHub Pages
+    # Copy dist + src files for GitHub Pages
     - name: Prepare pages artifact
       run: |
-        mkdir -p pages
-        cp wa-sqlite/dist/* pages/
-        mkdir -p pages/src/examples
+        mkdir -p pages/dist pages/src/examples
+        cp wa-sqlite/dist/* pages/dist/
         cp wa-sqlite/src/sqlite-api.js pages/src/
         cp wa-sqlite/src/sqlite-constants.js pages/src/
         cp wa-sqlite/src/VFS.js pages/src/
-        cp wa-sqlite/src/examples/OriginPrivateFileSystemVFS.js pages/src/examples/
-        cp wa-sqlite/src/examples/WebLocks.js pages/src/examples/
+        cp wa-sqlite/src/FacadeVFS.js pages/src/
+        cp wa-sqlite/src/WebLocksMixin.js pages/src/
+        cp wa-sqlite/src/examples/*.js pages/src/examples/
 
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v3
