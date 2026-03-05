@@ -5,6 +5,12 @@ name: wa-sqlite workflow
 on:
   workflow_dispatch:
     inputs:
+      wa_sqlite_tag:
+        description: 'wa-sqlite git tag'
+        default: 'v1.0.9'
+        required: true
+        type: string
+
       sqlite_tag:
         description: 'SQLite source tree tag'
         default: 'version-3.50.1'
@@ -19,14 +25,20 @@ on:
 
       make_args:
         description: 'make arguments'
-        default: ''
+        default: 'WASQLITE_EXTRA_DEFINES="-DSQLITE_ENABLE_RTREE"'
         required: false
         type: string
-        
+
+# Grant GITHUB_TOKEN permission to deploy to Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 env:
   EM_CACHE_FOLDER: 'emsdk-cache'
   GH_TOKEN: ${{ github.token }}
-  
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -35,7 +47,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         sparse-checkout: overlay.wa-sqlite
-    
+
     # Install EMSDK
     - name: Setup Emscripten
       id: cache-system-libraries
@@ -49,25 +61,42 @@ jobs:
         actions-cache-folder: ${{env.EM_CACHE_FOLDER}}
     - run: emcc -v
 
-    # Check out wa-sqlite
+    # Check out wa-sqlite at specified tag
     - name: Check out wa-sqlite
-      run: git clone https://github.com/rhashimoto/wa-sqlite.git
+      run: git clone --branch ${{inputs.wa_sqlite_tag}} --depth 1 https://github.com/rhashimoto/wa-sqlite.git
 
     # Overlay files.
     - run: tar -C overlay.wa-sqlite -cf - . | tar -C wa-sqlite -xvf -
-    
+
     # Build
     - name: Build wa-sqlite
       working-directory: ./wa-sqlite
-      run: |
-        make ${{inputs.make_args}}
-        (cd dist; tar czf ../wa-sqlite.dist.tgz .)
+      run: make ${{inputs.make_args}}
 
-    # Package
-    - name: Create release
+    # Copy dist + src VFS files for GitHub Pages
+    - name: Prepare pages artifact
       run: |
-        echo "wa-sqlite build `date`" >> NOTES
-        echo "SQLite ${{inputs.sqlite_tag}}" >> NOTES
-        echo "EMSDK ${{inputs.em_version}}" >> NOTES
-        echo "${{inputs.make_args}}" >> NOTES
-        gh release create "v`date +%s`" wa-sqlite/*.tgz --generate-notes --notes-file NOTES
+        mkdir -p pages
+        cp wa-sqlite/dist/* pages/
+        mkdir -p pages/src/examples
+        cp wa-sqlite/src/sqlite-api.js pages/src/
+        cp wa-sqlite/src/sqlite-constants.js pages/src/
+        cp wa-sqlite/src/VFS.js pages/src/
+        cp wa-sqlite/src/examples/OriginPrivateFileSystemVFS.js pages/src/examples/
+        cp wa-sqlite/src/examples/WebLocks.js pages/src/examples/
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: pages
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
