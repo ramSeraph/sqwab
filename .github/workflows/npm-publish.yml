@@ -1,0 +1,165 @@
+# Workflow to build wa-sqlite with RTREE and publish to npm
+
+name: npm publish workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      wa_sqlite_tag:
+        description: 'wa-sqlite git tag'
+        default: 'v1.0.9'
+        required: true
+        type: string
+
+      sqlite_tag:
+        description: 'SQLite source tree tag'
+        default: 'version-3.50.1'
+        required: true
+        type: string
+
+      em_version:
+        description: 'EMSDK version'
+        default: '3.1.61'
+        required: true
+        type: string
+
+      make_args:
+        description: 'make arguments'
+        default: 'WASQLITE_EXTRA_DEFINES="-DSQLITE_ENABLE_RTREE"'
+        required: false
+        type: string
+
+      package_version:
+        description: 'npm package version (leave empty to derive from wa_sqlite_tag)'
+        default: ''
+        required: false
+        type: string
+
+env:
+  EM_CACHE_FOLDER: 'emsdk-cache'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        sparse-checkout: overlay.wa-sqlite
+
+    # Install EMSDK
+    - name: Setup Emscripten
+      id: cache-system-libraries
+      uses: actions/cache@v4
+      with:
+        path: ${{env.EM_CACHE_FOLDER}}
+        key: ${{inputs.em_version}}-${{runner.os}}
+    - uses: mymindstorm/setup-emsdk@v14
+      with:
+        version: ${{inputs.em_version}}
+        actions-cache-folder: ${{env.EM_CACHE_FOLDER}}
+    - run: emcc -v
+
+    # Check out wa-sqlite at specified tag
+    - name: Check out wa-sqlite
+      run: git clone --branch ${{inputs.wa_sqlite_tag}} --depth 1 https://github.com/rhashimoto/wa-sqlite.git
+
+    # Overlay files.
+    - run: tar -C overlay.wa-sqlite -cf - . | tar -C wa-sqlite -xvf -
+
+    # Build
+    - name: Build wa-sqlite
+      working-directory: ./wa-sqlite
+      run: make ${{inputs.make_args}}
+
+    # Prepare npm package
+    - name: Determine package version
+      id: version
+      run: |
+        if [ -n "${{inputs.package_version}}" ]; then
+          echo "version=${{inputs.package_version}}" >> "$GITHUB_OUTPUT"
+        else
+          echo "version=$(echo '${{inputs.wa_sqlite_tag}}' | sed 's/^v//')" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Prepare npm package
+      run: |
+        mkdir -p pkg/dist pkg/src/examples
+
+        cp wa-sqlite/dist/* pkg/dist/
+        cp wa-sqlite/src/sqlite-api.js pkg/src/
+        cp wa-sqlite/src/sqlite-constants.js pkg/src/
+        cp wa-sqlite/src/VFS.js pkg/src/
+        cp wa-sqlite/src/FacadeVFS.js pkg/src/
+        cp wa-sqlite/src/WebLocksMixin.js pkg/src/
+        cp wa-sqlite/src/examples/* pkg/src/examples/
+        cp wa-sqlite/LICENSE pkg/
+
+        if [ -d wa-sqlite/src/types ]; then
+          cp -r wa-sqlite/src/types pkg/src/types
+        fi
+
+        cat > pkg/README.md << 'READMEEOF'
+        # wa-sqlite-rtree
+
+        Custom build of [wa-sqlite](https://github.com/rhashimoto/wa-sqlite) with
+        [SQLITE_ENABLE_RTREE](https://www.sqlite.org/rtree.html) enabled.
+
+        ## Build details
+
+        READMEEOF
+
+        cat >> pkg/README.md << EOF
+        - **wa-sqlite**: ${{inputs.wa_sqlite_tag}}
+        - **SQLite**: ${{inputs.sqlite_tag}}
+        - **EMSDK**: ${{inputs.em_version}}
+        - **make args**: \`${{inputs.make_args}}\`
+
+        ## Usage
+
+        \`\`\`js
+        import SQLiteESMFactory from 'wa-sqlite-rtree/dist/wa-sqlite-async.mjs';
+        import * as SQLite from 'wa-sqlite-rtree/src/sqlite-api.js';
+
+        const module = await SQLiteESMFactory();
+        const sqlite3 = SQLite.Factory(module);
+        \`\`\`
+
+        Built from [sqwab](https://github.com/ramseraph/sqwab).
+        EOF
+
+        cat > pkg/package.json << EOF
+        {
+          "name": "wa-sqlite-rtree",
+          "version": "${{ steps.version.outputs.version }}",
+          "description": "wa-sqlite build with SQLITE_ENABLE_RTREE",
+          "type": "module",
+          "main": "src/sqlite-api.js",
+          "files": [
+            "src/**/*",
+            "dist/*",
+            "LICENSE"
+          ],
+          "keywords": ["sqlite", "wasm", "webassembly", "rtree", "wa-sqlite"],
+          "author": "ramseraph",
+          "license": "MIT",
+          "homepage": "https://github.com/ramseraph/sqwab",
+          "repository": {
+            "type": "git",
+            "url": "https://github.com/ramseraph/sqwab.git"
+          }
+        }
+        EOF
+
+    # Publish to npm
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Publish to npm
+      working-directory: ./pkg
+      run: npm publish --access public
+      env:
+        NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
